@@ -1,0 +1,7 @@
+{
+  "name": "silver-hair-trend-prediction",
+  "description": "基于多模型集成（ARIMA+LSTM+Prophet）的行业趋势分析与预测。",
+  "version": "1.0.0",
+  "author": "潘泽宇",
+  "category": "银发智家"
+}

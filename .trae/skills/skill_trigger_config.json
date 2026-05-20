@@ -1,0 +1,108 @@
+{
+  "triggers": {
+    "银发智家": {
+      "silver-hair-smart-home": {
+        "rule_conditions": [
+          {
+            "type": "contains_keyword",
+            "values": [
+              "银发智家",
+              "智能家居适老化",
+              "老龄化行业分析",
+              "适老化预测"
+            ]
+          }
+        ],
+        "intent_keywords": [
+          "银发智家",
+          "智能家居适老化",
+          "老龄化趋势",
+          "养老行业分析",
+          "AI+养老",
+          "适老化",
+          "银发经济"
+        ]
+      },
+      "silver-hair-data-query": {
+        "rule_conditions": [
+          {
+            "type": "contains_keyword",
+            "values": [
+              "数据查询",
+              "行业数据",
+              "市场规模"
+            ]
+          }
+        ],
+        "intent_keywords": [
+          "数据",
+          "统计",
+          "现状",
+          "规模",
+          "指标",
+          "查询"
+        ]
+      },
+      "silver-hair-policy-analysis": {
+        "rule_conditions": [
+          {
+            "type": "contains_keyword",
+            "values": [
+              "政策分析",
+              "政策解读",
+              "行业政策"
+            ]
+          }
+        ],
+        "intent_keywords": [
+          "政策",
+          "法规",
+          "政府",
+          "补贴",
+          "标准",
+          "银发经济政策"
+        ]
+      },
+      "silver-hair-trend-prediction": {
+        "rule_conditions": [
+          {
+            "type": "contains_keyword",
+            "values": [
+              "趋势预测",
+              "未来趋势",
+              "增长预测"
+            ]
+          }
+        ],
+        "intent_keywords": [
+          "预测",
+          "趋势",
+          "未来",
+          "增长",
+          "前景",
+          "发展方向"
+        ]
+      },
+      "silver-hair-custom-report": {
+        "rule_conditions": [
+          {
+            "type": "contains_keyword",
+            "values": [
+              "定制报告",
+              "行业报告",
+              "深度分析"
+            ]
+          }
+        ],
+        "intent_keywords": [
+          "报告",
+          "定制",
+          "深度",
+          "完整分析",
+          "对比分析",
+          "专题"
+        ]
+      }
+    }
+  }
+}
