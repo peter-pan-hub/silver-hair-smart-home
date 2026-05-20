@@ -1,28 +1,6 @@
 {
   "triggers": {
     "银发智家": {
-      "silver-hair-smart-home": {
-        "rule_conditions": [
-          {
-            "type": "contains_keyword",
-            "values": [
-              "银发智家",
-              "智能家居适老化",
-              "老龄化行业分析",
-              "适老化预测"
-            ]
-          }
-        ],
-        "intent_keywords": [
-          "银发智家",
-          "智能家居适老化",
-          "老龄化趋势",
-          "养老行业分析",
-          "AI+养老",
-          "适老化",
-          "银发经济"
-        ]
-      },
       "silver-hair-data-query": {
         "rule_conditions": [
           {
