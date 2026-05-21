@@ -548,5 +548,540 @@ def main():
         import traceback
         traceback.print_exc()
 
+# ============================================================
+# RAG-ETL 三角互证检索验证模块
+# 功能：RAG混合检索 → 三角互证交叉验证 → 一致性评分
+# ============================================================
+
+class RAGTriangulationEngine:
+    """
+    RAG增强检索 + 三角互证交叉验证引擎
+
+    架构：
+    ┌─ 第一层：结构化检索（PostgreSQL精确查询）
+    ├─ 第二层：语义检索（FAISS/ChromaDB向量检索）
+    ├─ 混合检索：结构化+语义融合排序
+    └─ 三角互证：三源交叉验证 + 一致性评分
+    """
+
+    def __init__(self, db_path=None):
+        if db_path is None:
+            db_path = os.path.join(
+                r'D:\panze（用户分身）\user\trae\file\校赛', 'elderly_data.db'
+            )
+        self.db_path = db_path
+
+        if os.path.exists(db_path):
+            self.conn = sqlite3.connect(db_path)
+            self.cursor = self.conn.cursor()
+        else:
+            self.conn = None
+            self.cursor = None
+            print(f'警告：数据库文件不存在 -> {db_path}')
+
+    def structured_search(self, query, filters=None):
+        """
+        第一层：结构化检索（PostgreSQL精确查询）
+        支持按字段精确筛选（发布机构、时间范围、政策类型等）
+
+        参数：
+            query: 查询条件SQL片段
+            filters: 过滤条件字典，如 {'agency': '国务院', 'year': 2024}
+        返回：
+            匹配的结构化数据记录列表
+        """
+        print(f'\n[RAG 结构化检索] 查询：{query}')
+
+        if self.cursor is None:
+            print('  ⚠️ 数据库未连接，跳过结构化检索')
+            return []
+
+        results = []
+
+        # 在 policy_data 表搜索
+        try:
+            sql = '''
+            SELECT policy_name, publish_agency, publish_date, policy_type,
+                   summary, keywords, level
+            FROM policy_data
+            WHERE policy_name LIKE ? OR keywords LIKE ? OR summary LIKE ?
+            '''
+            params = [f'%{query}%', f'%{query}%', f'%{query}%']
+
+            if filters:
+                if 'agency' in filters:
+                    sql += ' AND publish_agency LIKE ?'
+                    params.append(f'%{filters["agency"]}%')
+                if 'level' in filters:
+                    sql += ' AND level = ?'
+                    params.append(filters['level'])
+
+            self.cursor.execute(sql, params)
+            policy_results = self.cursor.fetchall()
+            for row in policy_results:
+                results.append({
+                    'source_type': 'policy_data',
+                    'table': '政策数据',
+                    'name': row[0],
+                    'agency': row[1],
+                    'date': row[2],
+                    'type': row[3],
+                    'summary': row[4],
+                    'keywords': row[5],
+                    'level': row[6],
+                    'search_method': '结构化检索(精确匹配)'
+                })
+            print(f'  政策数据表命中：{len(policy_results)} 条')
+        except sqlite3.OperationalError:
+            print('  政策数据表未创建或不存在')
+
+        # 在 time_series_indicators 表搜索
+        try:
+            sql = '''
+            SELECT indicator_name, indicator_category, region, year,
+                   value, unit, source, data_type
+            FROM time_series_indicators
+            WHERE indicator_name LIKE ? OR indicator_category LIKE ?
+            '''
+            params = [f'%{query}%', f'%{query}%']
+
+            if filters:
+                if 'year_from' in filters:
+                    sql += ' AND year >= ?'
+                    params.append(filters['year_from'])
+                if 'year_to' in filters:
+                    sql += ' AND year <= ?'
+                    params.append(filters['year_to'])
+
+            sql += ' ORDER BY year'
+            self.cursor.execute(sql, params)
+            trend_results = self.cursor.fetchall()
+            for row in trend_results:
+                results.append({
+                    'source_type': 'time_series_indicators',
+                    'table': '时序指标',
+                    'name': row[0],
+                    'category': row[1],
+                    'region': row[2],
+                    'year': row[3],
+                    'value': row[4],
+                    'unit': row[5],
+                    'source': row[6],
+                    'data_type': row[7],
+                    'search_method': '结构化检索(精确匹配)'
+                })
+            print(f'  时序指标表命中：{len(trend_results)} 条')
+        except sqlite3.OperationalError:
+            print('  时序指标表未创建或不存在')
+
+        return results
+
+    def semantic_search(self, query, top_k=5):
+        """
+        第二层：语义检索（模拟FAISS/ChromaDB向量检索）
+        实际场景中使用 shibing624/text2vec-base-chinese 作为嵌入模型
+
+        参数：
+            query: 语义查询文本
+            top_k: 返回最相似的 top_k 条结果
+        返回：
+            语义相似度排序后的结果列表
+        """
+        print(f'\n[RAG 语义检索] 查询："{query}"（top_k={top_k}）')
+
+        if self.cursor is None:
+            print('  ⚠️ 数据库未连接，跳过语义检索')
+            return []
+
+        results = []
+
+        # 模拟语义检索：按关键词匹配度排序
+        # 真实环境中会使用 FAISS/ChromaDB 进行向量相似度计算
+        query_keywords = set(self._extract_query_keywords(query))
+
+        # 从 report_materials 表检索
+        try:
+            self.cursor.execute('''
+            SELECT material_title, material_type, source_name,
+                   content_abstract, key_findings, confidence_level
+            FROM report_materials
+            ''')
+            all_materials = self.cursor.fetchall()
+
+            scored_results = []
+            for row in all_materials:
+                text = f"{row[0]} {row[3]} {row[4]}"
+                text_keywords = set(self._extract_query_keywords(text))
+                overlap = len(query_keywords & text_keywords)
+                if len(query_keywords) > 0:
+                    score = overlap / len(query_keywords)
+                else:
+                    score = 0
+                if score > 0:
+                    scored_results.append((score, row))
+
+            scored_results.sort(key=lambda x: x[0], reverse=True)
+
+            for score, row in scored_results[:top_k]:
+                results.append({
+                    'source_type': 'report_materials',
+                    'table': '报告素材',
+                    'title': row[0],
+                    'material_type': row[1],
+                    'source': row[2],
+                    'abstract': row[3],
+                    'findings': row[4],
+                    'confidence': row[5],
+                    'similarity_score': round(score, 3),
+                    'search_method': '语义检索(关键词匹配模拟)'
+                })
+            print(f'  报告素材表语义命中：{len(results)} 条')
+        except sqlite3.OperationalError:
+            print('  报告素材表未创建或不存在')
+
+        # 从 policy_data 表语义检索
+        try:
+            self.cursor.execute('''
+            SELECT policy_name, publish_agency, summary, keywords, level
+            FROM policy_data
+            ''')
+            all_policies = self.cursor.fetchall()
+
+            policy_scored = []
+            for row in all_policies:
+                text = f"{row[0]} {row[2]} {row[3]}"
+                text_keywords = set(self._extract_query_keywords(text))
+                overlap = len(query_keywords & text_keywords)
+                if len(query_keywords) > 0:
+                    score = overlap / len(query_keywords)
+                else:
+                    score = 0
+                if score > 0:
+                    policy_scored.append((score, row))
+
+            policy_scored.sort(key=lambda x: x[0], reverse=True)
+
+            for score, row in policy_scored[:top_k]:
+                results.append({
+                    'source_type': 'policy_data',
+                    'table': '政策数据',
+                    'name': row[0],
+                    'agency': row[1],
+                    'summary': row[2],
+                    'keywords': row[3],
+                    'level': row[4],
+                    'similarity_score': round(score, 3),
+                    'search_method': '语义检索(关键词匹配模拟)'
+                })
+            print(f'  政策数据表语义命中：{len(policy_scored[:top_k])} 条')
+        except sqlite3.OperationalError:
+            print('  政策数据表未创建或不存在')
+
+        # 按相似度排序
+        results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+
+        return results
+
+    def _extract_query_keywords(self, text):
+        """从文本中提取关键词"""
+        import jieba
+        if not text:
+            return []
+        words = jieba.lcut(text)
+        stopwords = {'的', '了', '和', '是', '就', '都', '而', '及', '与',
+                     '着', '或', '一个', '没有', '我们', '你们', '他们',
+                     '这个', '那个', '什么', '怎么', '因为', '所以', '但是',
+                     '而且', '如果', '虽然', '然后', '已经', '可以', '可能',
+                     '应该', '非常', '很', '太', '更', '最', '比较'}
+        return [w for w in words if w not in stopwords and len(w) > 1]
+
+    def hybrid_search(self, query, filters=None, top_k=5):
+        """
+        混合检索：结构化检索 + 语义检索融合排序
+
+        流程：
+        query → 结构化精确检索 + 语义相似度检索
+              → 结果融合 → 按综合得分排序 → 输出
+        """
+        print(f'\n{"=" * 50}')
+        print(f'  [RAG 混合检索] 查询："{query}"')
+        print(f'  [RAG 混合检索] 过滤器：{filters}')
+        print(f'  [RAG 混合检索] top_k：{top_k}')
+        print(f'{"=" * 50}')
+
+        # 执行两层检索
+        structured_results = self.structured_search(query, filters)
+        semantic_results = self.semantic_search(query, top_k)
+
+        # 融合结果：去重合并
+        seen_keys = set()
+        fused_results = []
+
+        for r in structured_results:
+            key = (r.get('source_type', ''), r.get('name', ''))
+            if key not in seen_keys:
+                r['hybrid_score'] = 1.0
+                seen_keys.add(key)
+                fused_results.append(r)
+
+        for r in semantic_results:
+            key = (r.get('source_type', ''), r.get('name', ''))
+            if key in seen_keys:
+                for existing in fused_results:
+                    if (existing.get('source_type') == r.get('source_type')
+                            and existing.get('name') == r.get('name')):
+                        existing['search_method'] = '混合检索(结构化+语义)'
+                        existing['hybrid_score'] = max(
+                            existing.get('hybrid_score', 0),
+                            r.get('similarity_score', 0)
+                        )
+                        break
+            else:
+                r['hybrid_score'] = r.get('similarity_score', 0)
+                seen_keys.add(key)
+                fused_results.append(r)
+
+        # 按综合得分排序
+        fused_results.sort(
+            key=lambda x: x.get('hybrid_score', 0), reverse=True
+        )
+
+        print(f'\n  [RAG 混合检索] 共检索到 {len(fused_results)} 条结果')
+        for i, r in enumerate(fused_results[:top_k], 1):
+            name = r.get('name', r.get('title', '未知'))
+            score = r.get('hybrid_score', r.get('similarity_score', 0))
+            method = r.get('search_method', '未知')
+            print(f'  [{i}] {name}')
+            print(f'      综合得分={score:.3f}，检索方式={method}')
+
+        return fused_results
+
+    def triangulation_validate(self, data_sources):
+        """
+        三角互证交叉验证
+
+        从三个层级的数据源交叉验证，确保结论可靠性：
+
+        层级A：宏观统计数据（政府/行业协会发布）
+        层级B：行业实时数据（企业/市场监测）
+        层级C：用户/场景调研数据（CFPS/问卷调查）
+
+        参数：
+            data_sources: 包含三个层级数据源的字典
+                          {'macro': [...], 'industry': [...], 'survey': [...]}
+        返回：
+            三角互证验证结果，包括一致性评分、偏差分析和结论
+        """
+        print(f'\n{"=" * 50}')
+        print(f'  [三角互证] 开始三层数据交叉验证')
+        print(f'{"=" * 50}')
+
+        validation_report = {
+            'sources': {},
+            'cross_checks': [],
+            'consistency_scores': {},
+            'overall_consistency': 0,
+            'conclusion': '',
+            'warnings': []
+        }
+
+        # 收集各层级数据
+        macro_values = []
+        industry_values = []
+        survey_values = []
+
+        for key, sources in data_sources.items():
+            if key == 'macro':
+                validation_report['sources']['宏观统计数据'] = sources
+                macro_values = [s.get('value', 0) for s in sources
+                                if 'value' in s]
+            elif key == 'industry':
+                validation_report['sources']['行业实时数据'] = sources
+                industry_values = [s.get('value', 0) for s in sources
+                                   if 'value' in s]
+            elif key == 'survey':
+                validation_report['sources']['用户/场景调研数据'] = sources
+                survey_values = [s.get('value', 0) for s in sources
+                                 if 'value' in s]
+
+            print(f'  层级"{key}"：{len(sources)} 条数据')
+
+        # 两两交叉比对
+        pairs = [
+            ('宏观统计数据', '行业实时数据', macro_values, industry_values),
+            ('宏观统计数据', '用户/场景调研数据', macro_values, survey_values),
+            ('行业实时数据', '用户/场景调研数据', industry_values, survey_values),
+        ]
+
+        all_scores = []
+        for name_a, name_b, vals_a, vals_b in pairs:
+            if vals_a and vals_b:
+                for va in vals_a[:3]:
+                    for vb in vals_b[:3]:
+                        if va > 0:
+                            deviation = abs(va - vb)
+                            consistency = max(0, 100 - (deviation / va * 100))
+                            check = {
+                                'source_a': name_a,
+                                'source_b': name_b,
+                                'value_a': va,
+                                'value_b': vb,
+                                'deviation': round(deviation, 2),
+                                'consistency': round(consistency, 2)
+                            }
+                            validation_report['cross_checks'].append(check)
+                            all_scores.append(consistency)
+
+                            print(f'  {name_a}({va}) ↔ {name_b}({vb})')
+                            print(f'    偏差={deviation:.2f}，一致性={consistency:.1f}%')
+
+        # 计算总体一致性评分
+        if all_scores:
+            overall = sum(all_scores) / len(all_scores)
+            validation_report['overall_consistency'] = round(overall, 2)
+
+            if overall >= 90:
+                validation_report['conclusion'] = '高度一致'
+                validation_report['level'] = '强'
+                print(f'\n  ✅ 三角互证结论：高度一致（{overall:.1f}%）')
+            elif overall >= 70:
+                validation_report['conclusion'] = '基本一致'
+                validation_report['level'] = '中'
+                print(f'\n  ⚠️ 三角互证结论：基本一致（{overall:.1f}%）')
+            else:
+                validation_report['conclusion'] = '存在分歧'
+                validation_report['level'] = '弱'
+                validation_report['warnings'].append(
+                    f'多源数据一致性较低({overall:.1f}%)，结论需谨慎使用'
+                )
+                print(f'\n  ❌ 三角互证结论：存在分歧（{overall:.1f}%）')
+        else:
+            validation_report['conclusion'] = '数据不足'
+            validation_report['level'] = '无'
+            validation_report['warnings'].append(
+                '缺少足够的多源数据进行三角互证验证'
+            )
+            print('\n  ⚠️ 三角互证结论：数据不足以完成验证')
+
+        # 检查三个层级是否都覆盖
+        active_sources = [k for k, v in data_sources.items() if v]
+        if len(active_sources) < 3:
+            missing = ['macro', 'industry', 'survey']
+            missing = [m for m in missing if m not in active_sources]
+            validation_report['warnings'].append(
+                f'三角互证层级不完整，缺少：{", ".join(missing)}'
+            )
+
+        return validation_report
+
+    def calculate_consistency_score(self, values):
+        """
+        计算多源数据一致性评分
+        使用变异系数(CV)衡量多源数据的离散程度
+
+        参数：
+            values: 同一指标的多源观测值列表
+        返回：
+            consistency: 一致性评分(0-100)
+            cv: 变异系数
+        """
+        import numpy as np
+
+        values = [v for v in values if v is not None and v > 0]
+        if len(values) < 2:
+            return 0, None
+
+        mean_val = np.mean(values)
+        std_val = np.std(values, ddof=1)
+
+        if mean_val == 0:
+            return 0, None
+
+        cv = std_val / mean_val
+
+        # CV越小，一致性越高
+        # CV < 0.05 → 高度一致(95分+)
+        # CV < 0.10 → 较一致(80分+)
+        # CV < 0.20 → 基本一致(60分+)
+        # CV >= 0.20 → 有分歧(<60分)
+        if cv < 0.05:
+            consistency = 95
+        elif cv < 0.10:
+            consistency = 85
+        elif cv < 0.15:
+            consistency = 70
+        elif cv < 0.20:
+            consistency = 60
+        else:
+            consistency = max(30, 100 - (cv * 100))
+
+        return round(consistency, 1), round(cv, 4)
+
+    def generate_triangulation_report(self, sources):
+        """
+        生成三角互证验证报告（完整版）
+
+        参数：
+            sources: 包含三个来源的数据字典
+                     {
+                         'macro': [{'name': ..., 'value': ..., 'source': ...}],
+                         'industry': [...],
+                         'survey': [...]
+                     }
+        返回：
+            格式化的三角互证验证报告（字符串）
+        """
+        validation = self.triangulation_validate(sources)
+
+        report_lines = []
+        report_lines.append('\n')
+        report_lines.append('=' * 60)
+        report_lines.append('  三角互证验证报告')
+        report_lines.append('=' * 60)
+
+        # 数据来源概览
+        report_lines.append('\n【数据来源概览】')
+        for source_type, data_list in sources.items():
+            labels = {
+                'macro': '宏观统计数据',
+                'industry': '行业实时数据',
+                'survey': '用户/场景调研数据'
+            }
+            label = labels.get(source_type, source_type)
+            report_lines.append(f'  {label}：{len(data_list)} 条')
+            for d in data_list:
+                name = d.get('name', d.get('title', '未知'))
+                value = d.get('value', d.get('findings', 'N/A'))
+                source = d.get('source', '未知来源')
+                report_lines.append(f'    - {name}：{value}（来源：{source}）')
+
+        # 交叉验证结果
+        report_lines.append('\n【交叉验证结果】')
+        for check in validation['cross_checks']:
+            report_lines.append(
+                f'  {check["source_a"]} ↔ {check["source_b"]}：'
+                f'一致性 {check["consistency"]}%'
+            )
+
+        # 总体结论
+        report_lines.append(f'\n【总体结论】')
+        report_lines.append(f'  一致性评分：{validation["overall_consistency"]}')
+        report_lines.append(f'  验证结论：{validation["conclusion"]}')
+        report_lines.append(f'  验证强度：{validation["level"]}')
+
+        if validation['warnings']:
+            report_lines.append(f'\n【警告/提示】')
+            for w in validation['warnings']:
+                report_lines.append(f'  ⚠️ {w}')
+
+        report_lines.append(f'\n{"=" * 60}\n')
+
+        return '\n'.join(report_lines)
+
+    def close(self):
+        if self.conn:
+            self.conn.close()
+
+
 if __name__ == "__main__":
     main()
